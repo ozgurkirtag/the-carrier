@@ -1,8 +1,13 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
-void main() => runApp(const TheCarrierApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  MobileAds.instance.initialize();
+  runApp(const TheCarrierApp());
+}
 
 class TheCarrierApp extends StatelessWidget {
   const TheCarrierApp({super.key});
@@ -24,7 +29,14 @@ class Vehicle {
   final int reward;
   final int fuelMax;
 
-  const Vehicle(this.name, this.icon, this.price, this.repairCost, this.reward, this.fuelMax);
+  const Vehicle(
+    this.name,
+    this.icon,
+    this.price,
+    this.repairCost,
+    this.reward,
+    this.fuelMax,
+  );
 }
 
 class GamePage extends StatefulWidget {
@@ -58,11 +70,36 @@ class _GamePageState extends State<GamePage> {
   Timer? timer;
   final random = Random();
 
+  BannerAd? _bannerAd;
+  bool _isBannerAdReady = false;
+
   @override
   void initState() {
     super.initState();
     fuel = vehicles[currentVehicle].fuelMax;
     newRound();
+    _loadBannerAd();
+  }
+
+  void _loadBannerAd() {
+    _bannerAd = BannerAd(
+      adUnitId: 'ca-app-pub-3940256099942544/6300978111',
+      request: const AdRequest(),
+      size: AdSize.banner,
+      listener: BannerAdListener(
+        onAdLoaded: (_) {
+          if (!mounted) return;
+          setState(() {
+            _isBannerAdReady = true;
+          });
+        },
+        onAdFailedToLoad: (ad, error) {
+          ad.dispose();
+        },
+      ),
+    );
+
+    _bannerAd!.load();
   }
 
   void startGame() {
@@ -176,6 +213,7 @@ class _GamePageState extends State<GamePage> {
 
   void showMessage(String title, String message) {
     Future.delayed(Duration.zero, () {
+      if (!mounted) return;
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
@@ -204,6 +242,7 @@ class _GamePageState extends State<GamePage> {
   @override
   void dispose() {
     timer?.cancel();
+    _bannerAd?.dispose();
     super.dispose();
   }
 
@@ -283,6 +322,7 @@ class _GamePageState extends State<GamePage> {
                   builder: (context, constraints) {
                     final width = constraints.maxWidth;
                     final height = constraints.maxHeight;
+                    final obstacleIcon = obstacleLane == 0 ? '🚧' : obstacleLane == 1 ? '🚗' : '🕳️';
 
                     return Stack(
                       children: [
@@ -307,10 +347,7 @@ class _GamePageState extends State<GamePage> {
                         Positioned(
                           left: laneX(obstacleLane, width) - 24,
                           top: height * 0.46,
-                          child: Text(
-                            random.nextBool() ? '🚧' : '🚗',
-                            style: const TextStyle(fontSize: 46),
-                          ),
+                          child: Text(obstacleIcon, style: const TextStyle(fontSize: 46)),
                         ),
 
                         Positioned(
@@ -365,7 +402,7 @@ class _GamePageState extends State<GamePage> {
 
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(10),
               color: const Color(0xFF020617),
               child: const Text(
                 'Kaydır: Şerit değiştir | Dokun: İlerle | Paket topla, engelden kaç',
@@ -373,6 +410,13 @@ class _GamePageState extends State<GamePage> {
                 style: TextStyle(color: Colors.white70),
               ),
             ),
+
+            if (_isBannerAdReady && _bannerAd != null)
+              SizedBox(
+                height: _bannerAd!.size.height.toDouble(),
+                width: _bannerAd!.size.width.toDouble(),
+                child: AdWidget(ad: _bannerAd!),
+              ),
           ],
         ),
       ),
