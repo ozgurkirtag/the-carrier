@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,8 +29,19 @@ class Vehicle {
   final int repairCost;
   final int reward;
   final int fuelMax;
+  final int speedMs;
+  final double size;
 
-  const Vehicle(this.name, this.icon, this.price, this.repairCost, this.reward, this.fuelMax);
+  const Vehicle(
+    this.name,
+    this.icon,
+    this.price,
+    this.repairCost,
+    this.reward,
+    this.fuelMax,
+    this.speedMs,
+    this.size,
+  );
 }
 
 class Mission {
@@ -49,13 +61,13 @@ class GamePage extends StatefulWidget {
 
 class _GamePageState extends State<GamePage> {
   final vehicles = const [
-    Vehicle('Bisiklet', '🚲', 0, 20, 25, 999),
-    Vehicle('Scooter', '🛴', 500, 60, 45, 80),
-    Vehicle('Motor', '🏍️', 2000, 150, 80, 100),
-    Vehicle('Araba', '🚗', 7500, 400, 150, 120),
-    Vehicle('Kamyonet', '🚚', 20000, 1000, 300, 150),
-    Vehicle('Helikopter', '🚁', 75000, 3000, 700, 180),
-    Vehicle('Kargo Uçağı', '✈️', 250000, 10000, 2000, 220),
+    Vehicle('Bisiklet', '🚲', 0, 20, 25, 999, 380, 54),
+    Vehicle('Scooter', '🛴', 500, 60, 45, 80, 340, 58),
+    Vehicle('Motor', '🏍️', 2000, 150, 80, 100, 300, 62),
+    Vehicle('Araba', '🚗', 7500, 400, 150, 120, 260, 66),
+    Vehicle('Kamyonet', '🚚', 20000, 1000, 300, 150, 230, 72),
+    Vehicle('Helikopter', '🚁', 75000, 3000, 700, 180, 210, 78),
+    Vehicle('Kargo Uçağı', '✈️', 250000, 10000, 2000, 220, 190, 84),
   ];
 
   final missions = const [
@@ -63,6 +75,7 @@ class _GamePageState extends State<GamePage> {
     Mission('15 teslimat yap', 15, 1000),
     Mission('30 teslimat yap', 30, 3000),
     Mission('60 teslimat yap', 60, 8000),
+    Mission('100 teslimat yap', 100, 20000),
   ];
 
   int money = 0;
@@ -75,44 +88,109 @@ class _GamePageState extends State<GamePage> {
   int obstacleLane = 0;
   int fuel = 999;
   int roadOffset = 0;
+  int bestDeliveries = 0;
+  int sessionEarned = 0;
   bool playing = false;
 
   Timer? timer;
   final random = Random();
 
-  BannerAd? _bannerAd;
-  bool _isBannerReady = false;
+  BannerAd? bannerAd;
+  bool bannerReady = false;
+
+  RewardedAd? rewardedAd;
+  bool rewardedReady = false;
 
   @override
   void initState() {
     super.initState();
-    fuel = vehicles[currentVehicle].fuelMax;
+    loadGame();
     newRound();
     loadBanner();
+    loadRewarded();
+  }
+
+  Future<void> loadGame() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      money = prefs.getInt('money') ?? 0;
+      deliveries = prefs.getInt('deliveries') ?? 0;
+      level = prefs.getInt('level') ?? 1;
+      xp = prefs.getInt('xp') ?? 0;
+      currentVehicle = prefs.getInt('currentVehicle') ?? 0;
+      bestDeliveries = prefs.getInt('bestDeliveries') ?? 0;
+      fuel = prefs.getInt('fuel') ?? vehicles[currentVehicle].fuelMax;
+    });
+  }
+
+  Future<void> saveGame() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('money', money);
+    await prefs.setInt('deliveries', deliveries);
+    await prefs.setInt('level', level);
+    await prefs.setInt('xp', xp);
+    await prefs.setInt('currentVehicle', currentVehicle);
+    await prefs.setInt('bestDeliveries', bestDeliveries);
+    await prefs.setInt('fuel', fuel);
   }
 
   void loadBanner() {
-    _bannerAd = BannerAd(
+    bannerAd = BannerAd(
       adUnitId: 'ca-app-pub-3940256099942544/6300978111',
       request: const AdRequest(),
       size: AdSize.banner,
       listener: BannerAdListener(
         onAdLoaded: (_) {
           if (!mounted) return;
-          setState(() => _isBannerReady = true);
+          setState(() => bannerReady = true);
         },
-        onAdFailedToLoad: (ad, error) {
-          ad.dispose();
+        onAdFailedToLoad: (ad, error) => ad.dispose(),
+      ),
+    );
+    bannerAd!.load();
+  }
+
+  void loadRewarded() {
+    RewardedAd.load(
+      adUnitId: 'ca-app-pub-3940256099942544/5224354917',
+      request: const AdRequest(),
+      rewardedAdLoadCallback: RewardedAdLoadCallback(
+        onAdLoaded: (ad) {
+          rewardedAd = ad;
+          rewardedReady = true;
+        },
+        onAdFailedToLoad: (error) {
+          rewardedReady = false;
         },
       ),
     );
-    _bannerAd!.load();
+  }
+
+  void showRewardAd() {
+    if (rewardedAd == null || !rewardedReady) {
+      rewardBonus(false);
+      return;
+    }
+
+    rewardedAd!.show(
+      onUserEarnedReward: (ad, reward) {
+        rewardBonus(true);
+      },
+    );
+
+    rewardedAd = null;
+    rewardedReady = false;
+    loadRewarded();
   }
 
   void startGame() {
-    setState(() => playing = true);
+    setState(() {
+      playing = true;
+      sessionEarned = 0;
+    });
+
     timer?.cancel();
-    timer = Timer.periodic(const Duration(milliseconds: 320), (_) {
+    timer = Timer.periodic(Duration(milliseconds: vehicles[currentVehicle].speedMs), (_) {
       if (!playing) return;
       setState(() => roadOffset = (roadOffset + 1) % 8);
     });
@@ -156,7 +234,8 @@ class _GamePageState extends State<GamePage> {
         if (fuel <= 0) {
           playing = false;
           timer?.cancel();
-          showMessage('Yakıt bitti!', 'Yakıt doldur ve yola devam et.');
+          saveGame();
+          showMessage('Yakıt bitti!', 'Yakıt doldur ve devam et.');
           return;
         }
       }
@@ -172,21 +251,27 @@ class _GamePageState extends State<GamePage> {
         playing = false;
         timer?.cancel();
 
-        showMessage(
-          'Kaza yaptın!',
-          'Tamir masrafı kesildi. Paran yetmezse bir alt araca düştün.\n\nMevcut araç: ${vehicles[currentVehicle].icon} ${vehicles[currentVehicle].name}',
-        );
+        if (deliveries > bestDeliveries) {
+          bestDeliveries = deliveries;
+        }
+
+        saveGame();
+        showGameOver();
       } else {
         if (lane == packageLane) {
           money += vehicle.reward;
+          sessionEarned += vehicle.reward;
           deliveries++;
           xp += 20;
           checkLevel();
           checkMission();
         } else {
           money += 5;
+          sessionEarned += 5;
           xp += 5;
         }
+
+        saveGame();
         newRound();
       }
     });
@@ -198,6 +283,7 @@ class _GamePageState extends State<GamePage> {
       xp -= need;
       level++;
       money += level * 100;
+      sessionEarned += level * 100;
     }
   }
 
@@ -205,6 +291,7 @@ class _GamePageState extends State<GamePage> {
     for (final mission in missions) {
       if (deliveries == mission.target) {
         money += mission.reward;
+        sessionEarned += mission.reward;
         Future.delayed(Duration.zero, () {
           showMessage('Görev tamamlandı!', '${mission.title}\nÖdül: ${mission.reward} TL');
         });
@@ -223,30 +310,33 @@ class _GamePageState extends State<GamePage> {
         currentVehicle++;
         fuel = next.fuelMax;
       });
+      saveGame();
       showMessage('Yeni araç!', '${next.icon} ${next.name} garaja eklendi.');
     }
   }
 
   void refillFuel() {
-    final cost = 100 + currentVehicle * 100;
     if (currentVehicle == 0) return;
+    final cost = 100 + currentVehicle * 100;
 
     if (money >= cost) {
       setState(() {
         money -= cost;
         fuel = vehicles[currentVehicle].fuelMax;
       });
+      saveGame();
     } else {
       showMessage('Para yetersiz', 'Yakıt için $cost TL gerekiyor.');
     }
   }
 
-  void rewardBonus() {
+  void rewardBonus(bool fromAd) {
     setState(() {
-      money += 250;
+      money += fromAd ? 500 : 250;
       if (currentVehicle > 0) fuel = vehicles[currentVehicle].fuelMax;
     });
-    showMessage('Ödül alındı!', '250 TL bonus kazandın.');
+    saveGame();
+    showMessage('Ödül alındı!', fromAd ? 'Reklam ödülü: 500 TL kazandın.' : '250 TL bonus kazandın.');
   }
 
   void showGarage() {
@@ -264,7 +354,7 @@ class _GamePageState extends State<GamePage> {
               final v = vehicles[index];
               final unlocked = index <= currentVehicle;
               return ListTile(
-                leading: Text(v.icon, style: const TextStyle(fontSize: 28)),
+                leading: Text(v.icon, style: const TextStyle(fontSize: 30)),
                 title: Text(v.name),
                 subtitle: Text(unlocked ? 'Açık' : '${v.price} TL'),
                 trailing: unlocked ? const Icon(Icons.check_circle) : const Icon(Icons.lock),
@@ -283,6 +373,35 @@ class _GamePageState extends State<GamePage> {
         ],
       ),
     );
+  }
+
+  void showGameOver() {
+    final vehicle = vehicles[currentVehicle];
+    Future.delayed(Duration.zero, () {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Kaza yaptın!'),
+          content: Text(
+            'Seans kazancı: $sessionEarned TL\n'
+            'Toplam teslimat: $deliveries\n'
+            'En iyi teslimat: $bestDeliveries\n'
+            'Mevcut araç: ${vehicle.icon} ${vehicle.name}\n\n'
+            'Tamir masrafı kesildi. Paran yetmezse bir alt araca düştün.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                startGame();
+              },
+              child: const Text('Devam Et'),
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   void showMessage(String title, String message) {
@@ -316,7 +435,8 @@ class _GamePageState extends State<GamePage> {
   @override
   void dispose() {
     timer?.cancel();
-    _bannerAd?.dispose();
+    bannerAd?.dispose();
+    rewardedAd?.dispose();
     super.dispose();
   }
 
@@ -348,10 +468,7 @@ class _GamePageState extends State<GamePage> {
                     ],
                   ),
                   const SizedBox(height: 7),
-                  LinearProgressIndicator(
-                    value: xp / max(100, level * 100),
-                    minHeight: 7,
-                  ),
+                  LinearProgressIndicator(value: xp / max(100, level * 100), minHeight: 7),
                   const SizedBox(height: 7),
                   Row(
                     children: [
@@ -381,7 +498,7 @@ class _GamePageState extends State<GamePage> {
                           style: const TextStyle(color: Colors.white70, fontSize: 12),
                         ),
                       ),
-                      ElevatedButton(onPressed: showGarage, child: const Text('GARaj')),
+                      ElevatedButton(onPressed: showGarage, child: const Text('Garaj')),
                       const SizedBox(width: 6),
                       ElevatedButton(
                         onPressed: nextVehicle != null && money >= nextVehicle.price ? buyNextVehicle : null,
@@ -430,9 +547,9 @@ class _GamePageState extends State<GamePage> {
                           child: Text(obstacleIcon, style: const TextStyle(fontSize: 46)),
                         ),
                         Positioned(
-                          left: laneX(lane, width) - 30,
+                          left: laneX(lane, width) - vehicle.size / 2,
                           bottom: 45,
-                          child: Text(vehicle.icon, style: const TextStyle(fontSize: 58)),
+                          child: Text(vehicle.icon, style: TextStyle(fontSize: vehicle.size)),
                         ),
                         if (!playing)
                           Positioned.fill(
@@ -445,10 +562,12 @@ class _GamePageState extends State<GamePage> {
                                     const Text('THE CARRIER', style: TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.bold)),
                                     const SizedBox(height: 8),
                                     const Text('Taşı, kazan, imparatorluğunu kur.', style: TextStyle(color: Colors.white70, fontSize: 17)),
+                                    const SizedBox(height: 10),
+                                    Text('En iyi: $bestDeliveries teslimat', style: const TextStyle(color: Colors.amber, fontSize: 15)),
                                     const SizedBox(height: 22),
                                     ElevatedButton(onPressed: startGame, child: const Text('BAŞLA', style: TextStyle(fontSize: 24))),
                                     const SizedBox(height: 10),
-                                    ElevatedButton(onPressed: rewardBonus, child: const Text('ÖDÜL AL +250 TL')),
+                                    ElevatedButton(onPressed: showRewardAd, child: const Text('REKLAM İZLE +500 TL')),
                                     const SizedBox(height: 10),
                                     ElevatedButton(onPressed: refillFuel, child: const Text('YAKIT DOLDUR')),
                                   ],
@@ -472,11 +591,11 @@ class _GamePageState extends State<GamePage> {
                 style: const TextStyle(color: Colors.white70),
               ),
             ),
-            if (_isBannerReady && _bannerAd != null)
+            if (bannerReady && bannerAd != null)
               SizedBox(
-                height: _bannerAd!.size.height.toDouble(),
-                width: _bannerAd!.size.width.toDouble(),
-                child: AdWidget(ad: _bannerAd!),
+                height: bannerAd!.size.height.toDouble(),
+                width: bannerAd!.size.width.toDouble(),
+                child: AdWidget(ad: bannerAd!),
               ),
           ],
         ),
