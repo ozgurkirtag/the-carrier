@@ -1,0 +1,62 @@
+name: Build Android AAB
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+
+      - name: Create Android project
+        run: flutter create --project-name thecarrier --org com.kirtagapps --platforms=android .
+
+      - name: Set Android SDK 35
+        run: |
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle
+          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' android/app/build.gradle
+
+      - name: Restore fixed upload keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build release AAB
+        run: flutter build appbundle --release
+
+      - name: Remove debug signature if exists
+        run: |
+          zip -d build/app/outputs/bundle/release/app-release.aab "META-INF/*" || true
+
+      - name: Sign AAB with fixed upload key
+        run: |
+          jarsigner -verbose \
+            -sigalg SHA256withRSA \
+            -digestalg SHA-256 \
+            -keystore android/app/upload-keystore.jks \
+            -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+            -keypass "${{ secrets.KEY_PASSWORD }}" \
+            build/app/outputs/bundle/release/app-release.aab \
+            "${{ secrets.KEY_ALIAS }}"
+
+      - name: Verify release signature
+        run: |
+          jarsigner -verify -verbose -certs build/app/outputs/bundle/release/app-release.aab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: the-carrier-aab
+          path: build/app/outputs/bundle/release/app-release.aab
